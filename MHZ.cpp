@@ -20,6 +20,7 @@ const int STATUS_INCOMPLETE = -4;
 const int STATUS_NOT_READY = -5;
 const int STATUS_PWM_NOT_CONFIGURED = -6;
 const int STATUS_SERIAL_NOT_CONFIGURED = -7;
+const int STATUS_BAD_SPAN_VALUE = -8;
 
 unsigned long lastRequest = 0;
 
@@ -102,6 +103,80 @@ boolean MHZ::isReady() {
   }
 }
 
+int MHZ::setCO2ABCmode(boolean enable) {
+  if (!SerialConfigured) {
+    if (debug) Serial.println(F("-- serial is not configured"));
+    return STATUS_SERIAL_NOT_CONFIGURED;
+  }
+  if (!isReady()) return STATUS_NOT_READY;
+  byte cmd[9] = {0xFF, 0x01, 0x79, 0x00, 0x00, 0x00, 0x00, 0x00, 0x86};
+  // basic command structure, change byte 3 to set mode
+  // Byte 3 0xA0 = ABC on; Byte3 is 0x00 = ABC off
+  // Also need to change checksum
+  if (enable) {
+    if (debug) Serial.println(F("-- Enable CO2 auto-baseline = ABC on ---"));
+    cmd[3] = 0xA0;
+    cmd[8] = 0xE6;
+  } else {
+    if (debug) Serial.println(F("-- Disable CO2 auto-baseline = ABC off ---"));
+    // note command above was for off, so no change
+  }
+  if (debug) Serial.print(F("  >> Sending CO2 ABC mode request"));
+  _serial->write(cmd, 9);  // send command to set ABC mode
+  lastRequest = millis();
+  delay(100);  // wait a short moment to avoid false reading
+}
+
+int MHZ::setCO2background() {
+  // From the manual: ZERO POINT is 400PPM, PLS MAKE SURE
+  // THE SENSOR HAD BEEN WORKED UNDER 400PPM FOR OVER 20MINUTES
+  if (!SerialConfigured) {
+    if (debug) Serial.println(F("-- serial is not configured"));
+    return STATUS_SERIAL_NOT_CONFIGURED;
+  }
+  if (!isReady()) return STATUS_NOT_READY;
+  byte cmd[9] = {0xFF, 0x01, 0x87, 0x00, 0x00, 0x00, 0x00, 0x00, 0x78};
+  if (debug) Serial.println(F("-- manually setting CO2 background ---"));
+  if (debug) Serial.print(F("  >> Sending CO2 background request"));
+  _serial->write(cmd, 9);  // set current level to background
+  lastRequest = millis();
+  delay(100);  // wait a short moment to avoid false reading
+}
+
+int MHZ::setCO2span(int span_ppm) {
+  // From the manual:
+  // example: SPAN is 2000ppm，HIGH = 2000 / 256；LOW = 2000 % 256
+  // Note: Pls do ZERO calibration before span calibration
+  // Please make sure the sensor worked under a certain level co2
+  // for over 20 minutes. Suggest using 2000ppm as span, at least 1000ppm
+
+  if (span_ppm < 1000 or span_ppm > 5000) {
+    if (debug) Serial.println(F("span value out of range use 1000 <= span < 5000 ppm "));
+    return STATUS_BAD_SPAN_VALUE;
+  }
+  if (!SerialConfigured) {
+    if (debug) Serial.println(F("-- serial is not configured"));
+    return STATUS_SERIAL_NOT_CONFIGURED;
+  }
+  if (!isReady()) return STATUS_NOT_READY;
+  byte cmd[9] = {0xFF, 0x01, 0x88, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+  // fill in span value in bytes 3 and 4
+  cmd[3] = span_ppm / 256;
+  cmd[4] = span_ppm % 256;
+  // calculate checksum into byte 8
+  byte check = getCheckSum(cmd);
+  cmd[8] = check;
+  if (debug) {
+    Serial.print(F("MHZ span checksum is: "));
+    Serial.println(cmd[8], HEX);
+    Serial.println(F("-- manually setting CO2 span ---"));
+    Serial.print(F("  >> Sending CO2 span request"));
+  }
+  _serial->write(cmd, 9);  // set current level to span_ppm
+  lastRequest = millis();
+  delay(100);  // wait a short moment to avoid false reading
+}
+
 int MHZ::readCO2UART() {
   if (!SerialConfigured) {
     if (debug) Serial.println(F("-- serial is not configured"));
@@ -182,7 +257,7 @@ int MHZ::readCO2UART() {
 
   int ppm_uart = 256 * (int)response[2] + response[3];
 
-  temperature = response[4] - 44;  // - 40;
+  temperature = response[4] - 40;  // was - 44, but I think that was incorrect;
 
   byte status = response[5];
   if (debug) {

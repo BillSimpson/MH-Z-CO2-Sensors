@@ -36,6 +36,11 @@ class MHZ {
   boolean isPreHeating();
   boolean isReady();
 
+
+  int setCO2ABCmode(boolean enable);
+  int setCO2background();
+  int setCO2span(int span_ppm);
+
   int readCO2UART();
   int readCO2PWM();
   int getLastTemperature();
